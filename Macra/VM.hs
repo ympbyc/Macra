@@ -7,9 +7,10 @@ import qualified Control.Monad.State as S
 
 type Identity = U.Unique
 data Value = Double  Double
+           | Bool    Bool
            | Char    Char
            | List    [Value]
-           | Closure Identifier Inst Env Identity
+           | Closure Identifier Code Env --Identity
            | Thunk   Inst            Env
            deriving (Eq, Ord)
 
@@ -17,7 +18,7 @@ instance Show Value where
   show (Char c) = [c]
   show (Double i) = show i
   show (List xs) = concat ["(", concat (L.intersperse " " (map show xs)), ")"]
-  show (Closure var body _ _) = concat [show "Close: ", show var, show body]
+  show (Closure var body _) = concat [show "Close: ", show var, show body]
   show (Thunk body e) = show body
 
 type Identifier = String
@@ -25,13 +26,15 @@ data Inst = ConstExpr  Value           -- ldc
           | ConsInst
           | CarInst
           | CdrInst
-          | CloseInst  Identifier Inst -- ldf
+          | CloseInst  Identifier Code -- ldf
           | FreezeInst Inst
           | ApplyInst                  -- ap
           | ThawInst
           | ReferInst  Identifier      -- ld
           | ReturnInst                 -- ret
-          | TestInst   Inst       Inst -- sel
+          | TestInst   Code       Code -- sel
+          | JoinInst
+          | RestoreInst
           | DefineInst Identifier
           | HaltInst
           | PrintInst          
@@ -54,7 +57,117 @@ instance Show VM where
                                  "G: ", show ge, "\n"]
 
 type Stack = [Value]
-type Env = M.Map Identifier Value
-type Code = [Inst]
-type Dump = [([Value], Env, [Inst])]
+type Env   = M.Map Identifier Value
+type Code  = [Inst]
+type Dump  = [(Stack, Env, Code)]
+type VMCommand = S.StateT VM IO ()
+
+
+lookupVal :: Identifier -> Env -> Maybe Value
+lookupVal idtf env = M.lookup idtf env
+
+nil :: Value
+nil = List []
+
+true :: Value
+true = Double 0
+
+false :: Value
+false = nil
+
+vm :: Inst -> IO ()
+vm inst = do
+  S.evalStateT vm' VM {
+    vmStack = []
+  , vmEnv   = initialEnv
+  , vmCode  = [inst]
+  , vmDump  = []
+  , vmGlobalEnv  = M.fromList []
+  }
+  where initialEnv = M.fromList [ ("nil", nil) ]
+
+vm' :: VMCommand
+vm' = S.get >>= vm''
+
+
+-- VM --
+vm'' :: VM -> VMCommand
+
+vm'' (VM _ _ (HaltInst:_) _ _) = return ()
+
+-- cons constant value onto the stack
+vm'' vmState@(VM s _ ((ConstExpr val):nxt) _ _) = do
+  S.put vmState {
+    vmStack = val:s
+  , vmCode  = nxt  
+  }
+  vm'
+
+-- print the content on the stack
+vm'' vmState@(VM s e (PrintInst:nxt) d g) = do
+  S.liftIO $ print s
+  S.put vmState {
+    vmCode  = nxt
+  }
+  vm'
+
+-- refer the value associated with idtf in env
+vm'' vmState@(VM s e ((ReferInst idtf):nxt) _ _) = do
+  case lookupVal idtf e of
+    Just v -> do
+      S.put vmState {
+        vmStack = v:s
+      , vmCode  = nxt
+      }
+      vm'
+    Nothing -> do
+      S.liftIO $ do
+        putStr $ concat ["unbound variable: `", idtf, "'"]
+        return ()
+
+-- make a closure and cons it onto the stack
+vm'' vmState@(VM s e ((CloseInst param code):nxt) _ _) = do
+  S.put vmState {
+    vmStack = (Closure param code e):s
+  , vmCode  = nxt
+  }
+  vm'
+
+-- create a call frame and evaluate the closure applying the value at stack top
+vm'' vmState@(VM ((Closure param code env):arg:rest) e (ApplyInst:nxt) d _) = do
+  S.put vmState {
+    vmStack = rest
+  , vmEnv   = M.insert param arg env
+  , vmCode  = code
+  , vmDump  = (rest, e, nxt):d
+  }
+  vm'
+
+-- restore the dump, cons the stack top onto the now-current stack
+vm'' vmState@(VM (retVal:_) _ (RestoreInst:_) ((rS, rE, rC):dRest) _) = do
+  S.put vmState {
+    vmStack = retVal:rS
+  , vmEnv   = rE
+  , vmCode  = rC
+  , vmDump  = dRest
+  }
+  vm'
+
+-- if
+vm'' vmState@(VM ((Bool bool):sRest) _ ((TestInst tClause fClause):nxt) d g) = do
+  S.put vmState {
+    vmStack = sRest
+  , vmCode  = if bool then tClause else fClause
+  , vmDump  = ([], M.fromList [], nxt):d
+  }
+  vm'
+
+-- rejoin after the execution of TestInst
+vm'' vmState@(VM _ _ (JoinInst:_) ((_, _, nxt):dRest) _) = do
+  S.put vmState {
+    vmCode = nxt
+  , vmDump = dRest
+  }
+  vm'
+
 
