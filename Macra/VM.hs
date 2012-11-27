@@ -1,4 +1,4 @@
-module Macra.VM (Value(..), Identifier(..), Inst(..), vm) where
+module Macra.VM (Value(..), Identifier(..), Inst(..), {--vm--}) where
 
 import qualified Data.Unique as U
 import qualified Data.Map as M
@@ -6,12 +6,11 @@ import qualified Data.List as L
 import qualified Control.Monad.State as S
 
 type Identity = U.Unique
-data Value = Double Double
-           | Char Char
-           | List [Value]
-           | Refered Value Identifier         --Pair of value and the refered key, used in thaw
-           | Closure Identifier Inst   EnvRef Identity
-           | Thunk   Inst              EnvRef
+data Value = Double  Double
+           | Char    Char
+           | List    [Value]
+           | Closure Identifier Inst Env Identity
+           | Thunk   Inst            Env
            deriving (Eq, Ord)
 
 instance Show Value where
@@ -20,303 +19,42 @@ instance Show Value where
   show (List xs) = concat ["(", concat (L.intersperse " " (map show xs)), ")"]
   show (Closure var body _ _) = concat [show "Close: ", show var, show body]
   show (Thunk body e) = show body
-  show (Refered val idf) = concat [show idf, show ":", show val]
 
 type Identifier = String
-data Inst = FrameInst  Inst       Inst           --hasnext
-          | ConstExpr  Value      Inst           --hasnext
-          | ConsInst   Inst                      --hasnext
-          | CarInst    Inst                      --hasnext
-          | CdrInst    Inst                      --hasnext
-          | ArgInst    Inst                      --hasnext
-          | CloseInst  Identifier Inst Inst      --hasnext
-          | FreezeInst Inst       Inst           --hasnext
-          | ApplyInst
-          | ThawInst   Inst                      --hasnext
-          | ReferInst  Identifier Inst           --hasnext
-          | ReturnInst
-          | TestInst   Inst       Inst
-          | DefineInst Identifier Inst           --hasnext
+data Inst = ConstExpr  Value           -- ldc
+          | ConsInst
+          | CarInst
+          | CdrInst
+          | CloseInst  Identifier Inst -- ldf
+          | FreezeInst Inst
+          | ApplyInst                  -- ap
+          | ThawInst
+          | ReferInst  Identifier      -- ld
+          | ReturnInst                 -- ret
+          | TestInst   Inst       Inst -- sel
+          | DefineInst Identifier
           | HaltInst
-          | PrintInst  Inst                      --hasnext
-          | NativeInst Integer Inst              --hasnext
-          | EqualInst  Inst                      --hasnext
-          -- | NativeCallInst TwoArgFn Inst         --hasnext
+          | PrintInst          
+          | EqualInst
           deriving (Show, Eq, Ord)
 
 data VM = VM {
-     vmAcc :: Value
-   , vmInst :: Inst
-   , vmEnvRef :: EnvRef
-   , vmRib :: Rib
-   , vmStack :: Stack
-   , vmEnvMem :: EnvMem
+     vmStack :: Stack
+   , vmEnv :: Env
+   , vmCode :: Code
+   , vmDump :: Dump
+   , vmGlobalEnv :: Env
      }
 
 instance Show VM where
-  show (VM a x envRef r s envMem) = concat ["A: ", show a, "\n",
-                                            "X: ", show x, "\n",
-                                            "E: ", (case M.lookup envRef envMem of
-                                                     Just (e, p) -> show e
-                                                     Nothing -> "Environment Reference Error"), "\n",
-                                            "R: ", show r, "\n",
-                                            "S: ", "TODO", "\n"]
+  show (VM s e c d ge) = concat ["S: ", show s, "\n",
+                                 "E: ", show e, "\n",
+                                 "C: ", show c, "\n",
+                                 "D: ", show d, "\n",
+                                 "G: ", show ge, "\n"]
 
-type Env = ((M.Map Identifier Value), EnvRef)
-type Rib = [Value]
-type Stack = [(Inst, EnvRef, Rib)]
-type VMCommand = S.StateT VM IO ()
+type Stack = [Value]
+type Env = M.Map Identifier Value
+type Code = [Inst]
+type Dump = [([Value], Env, [Inst])]
 
-type EnvRef = U.Unique
-type EnvMem = M.Map EnvRef Env
-
-lookupVal :: Identifier -> EnvRef -> EnvMem -> Maybe Value
-lookupVal id envRef mem =
-  case M.lookup envRef mem of
-    Nothing -> Nothing
-    Just (e, parentEnvRef) ->
-      case M.lookup id e of
-        Just val -> Just val
-        Nothing -> lookupVal id parentEnvRef mem
-
-nil :: Value
-nil = List []
-
-true :: Value
-true = Double 0
-
-false :: Value
-false = nil
-
-equals :: Value -> Value -> Value
--- closure の 同値性比較
-equals (Closure _ _ _ aIdentity) (Closure _ _ _ bIdentity) = if aIdentity == bIdentity then true else false
--- どちらか一方でも closure 以外なら単に == で比較
-equals a b = if a == b then true else false
-
-
-nativeFunction nativeId =
-  -- nativeIdは1から始まる4桁の数字とする。(なんとなく)
-  -- ここは将来Mapでマッチングさせる
-  case nativeId of
-      1001 -> \x -> \y -> Double (x + y) -- Mathematical add
-      1002 -> \x -> \y -> Double (x - y) -- Mathematical sub
-      
-
-vm :: Inst -> IO ()
-vm inst = do
-        dummyParentEnvRef <- U.newUnique
-        envRef <- U.newUnique
-        S.evalStateT vm' VM {
-                         vmAcc = nil
-                       , vmInst = inst
-                       , vmEnvRef = envRef
-                       , vmRib = []
-                       , vmStack = []
-                       , vmEnvMem = M.fromList [ ( envRef
-                                                 , (initialEnv, dummyParentEnvRef)
-                                                 ) ]
-                         }
-        where initialEnv = M.fromList [ ("nil", nil) ]
-
-
-
-vm' :: VMCommand
-vm' = S.get >>= vm''
-
-vm'' ::  VM -> VMCommand
-vm'' (VM a HaltInst e r s _) = return ()
-vm'' vmState@(VM a (ConstExpr val nxt) e r s _) = do
-      S.put vmState {
-            vmAcc = val
-          , vmInst = nxt
-            }
-      vm'
-vm'' vmState@(VM a (ConsInst nxt) e (atom:r) s _) = do
-     case a of
-       List list -> do
-            S.put vmState {
-                  vmAcc = List (atom:list)
-                , vmRib = r
-                , vmInst = nxt
-                  }
-            vm'
-       val -> do
-         S.liftIO $ putStr $ concat [ "invalid list: ", show val ]
-         return ()
-vm'' vmState@(VM a (CarInst nxt) e r s _) = do
-     case a of
-       List (x:xs) -> do
-            S.put vmState {
-                  vmAcc = x
-                , vmInst = nxt
-                  }
-            vm'
-       List [] -> do
-         S.liftIO $ putStr $ concat [ "!car nil" ]
-         return ()
-       val -> do
-         S.liftIO $ putStr $ concat [ "invalid list: ", show val ]
-         return ()
-vm'' vmState@(VM a (CdrInst nxt) e r s _) = do
-     case a of
-       List (x:xs) -> do
-            S.put vmState {
-                  vmAcc = List xs
-                , vmInst = nxt
-                  }
-            vm'
-       List [] -> do
-         S.liftIO $ putStr $ concat [ "!cdr nil" ]
-         return ()
-       val -> do
-         S.liftIO $ putStr $ concat [ "invalid list: ", show val ]
-         return ()
-vm'' vmState@(VM a (PrintInst nxt) e r s _) = do
-      S.liftIO $ print a
-      S.put vmState {
-            vmInst = nxt
-            }
-      vm'
-vm'' vmState@(VM a (ReferInst id nxt) envRef r s envMem) = do
-      case lookupVal id envRef envMem of
-        Just v -> do
-          S.put vmState {
-                vmAcc = Refered v id --thaw needs id
-              , vmInst = nxt
-                }
-          vm'
-        Nothing -> do
-          S.liftIO $ do
-            putStr $ concat ["unbound variable: `", id, "'"]
-          return ()
-vm'' vmState@(VM a (DefineInst id nxt) envRef r s mem) = do
-      case M.lookup envRef mem of
-        -- TODO: Nothing ->
-        Just (e, parentEnvRef) -> do
-          S.put vmState {
-                vmEnvMem = M.insert envRef
-                                    ((M.insert id a e), parentEnvRef)
-                                    mem
-              , vmInst = nxt
-                }
-          vm'
-          return ()
-vm'' vmState@(VM a (FrameInst ret nxt) envRef r s _) = do
-      S.put vmState {
-            vmStack = (ret, envRef, r):s
-          , vmInst = nxt
-            }
-      vm'
-vm'' vmState@(VM a (ArgInst nxt) e r s _) = do
-      S.put vmState {
-            vmRib = a:r
-          , vmInst = nxt
-            }
-      vm'
-
--- ApplyInst applies a Closure to an argument
-vm'' vmState@(VM a ApplyInst _ (val:r) s mem) = do
-      case a of
-        (Closure var body envRef _) -> do
-          closedEnvRef <- S.lift U.newUnique
-          S.put vmState {
-                vmEnvRef = closedEnvRef
-              , vmEnvMem = (M.insert closedEnvRef
-                                     ((M.fromList [ (var, val) ]), envRef)
-                                     mem)
-              , vmInst = body
-                }
-          vm'
-        _ -> do
-          S.liftIO $ do
-            putStr $ concat ["invalid application: ", show a]
-          return ()
-
--- ThawInst thaws thunks
--- Call-by-name strategy thaws the thunk everytime the name is seen
-vm'' vmState@(VM (Refered a id) (ThawInst nxt) fnEnvRef _ _ mem) = do
-  case a of
-    (Thunk body envRef) -> do
-      S.put vmState {
-          vmAcc = a
-        , vmInst = body  -- evaluate the thunk
-        , vmEnvRef = envRef
-      }
-      vm'
-      newVMState@(VM acc _ _ _ _ mem') <- S.get
-      closedEnvRef <- S.lift U.newUnique
-      S.put newVMState {
-            vmInst = nxt   -- go to next instruction with the evaluated thunk on the accum
-          , vmEnvRef = closedEnvRef
-          , vmEnvMem = (M.insert closedEnvRef
-                                 ((M.fromList [ (id, acc) ]), fnEnvRef)
-                                 mem')
-      }
-      vm'
-    _ -> do
-      -- pass if the symbol is bound to non-thunk
-      S.put vmState {
-            vmAcc = a
-          , vmInst = nxt
-      }
-      vm'
-
-vm'' vmState@(VM a ReturnInst _ _ ((ret, envRef, r):s) _) = do
-        S.put vmState {
-              vmInst = ret
-            , vmEnvRef = envRef
-            , vmRib = r
-            , vmStack = s
-              }
-        vm'
-vm'' vmState@(VM a ReturnInst e r [] _) = do
-      S.liftIO $ do
-        putStr $ concat ["stack is empty"]
-      return ()
-vm'' vmState@(VM a (TestInst thenExp elseExp) e r s mem)
-     | a == nil = do
-       S.put vmState {
-             vmInst = elseExp
-             }
-       vm'
-     | otherwise = do
-       S.put vmState {
-             vmInst = thenExp
-             }
-       vm'
-vm'' vmState@(VM a (CloseInst var body nxt) envRef r s mem) = do
-        identity <- S.lift U.newUnique
-        S.put vmState {
-              vmAcc = Closure var body envRef identity
-            , vmInst = nxt
-              }
-        vm'
-        
--- Thunk is Closure without param
-vm'' vmState@(VM a (FreezeInst body nxt) envRef r s mem) = do
-        S.put vmState {
-              vmAcc = Thunk body envRef
-            , vmInst = nxt
-              }
-        vm'
-
--- native funcations --
-vm'' vmState@(VM _ (NativeInst nativeId nxt) e ((Thunk (ConstExpr  (Double x) _) _):(Thunk (ConstExpr (Double y) _) _):r) _ _) = do
-        S.put vmState {
-            vmInst = CloseInst "x" (CloseInst "y" (ConstExpr ((nativeFunction nativeId) x y) ReturnInst) ReturnInst) nxt
-        }
-        vm'
-
-vm'' vmState@(VM a (EqualInst nxt) _ (b:r) _ _) = do
-       S.put vmState {
-             vmAcc = equals a b
-           , vmRib = r
-           , vmInst = nxt
-                  }
-       vm'
-
-vm'' vmState = do
-     S.liftIO $ do
-       print "** VM BUG **: "
-       print vmState
