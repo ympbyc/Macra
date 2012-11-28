@@ -5,6 +5,8 @@ import qualified Data.Map as M
 import qualified Data.List as L
 import qualified Control.Monad.State as S
 
+import qualified Control.Exception as E
+
 type Identity = U.Unique
 data Value = Double  Double
            | Bool    Bool
@@ -34,7 +36,6 @@ data Inst = ConstExpr  Value           -- ldc
           | ReturnInst                 -- ret
           | TestInst   Code       Code -- sel
           | JoinInst
-          | RestoreInst
           | DefineInst Identifier
           | HaltInst
           | PrintInst          
@@ -142,17 +143,17 @@ vm'' vmState@(VM s e ((CloseInst param code):nxt) _ _) = do
   vm'
 
 -- create a call frame and evaluate the closure applying the value at stack top
-vm'' vmState@(VM ((Closure param code env):arg:rest) e (ApplyInst:nxt) d _) = do
+vm'' vmState@(VM ((Closure param code env):arg:sRest) e (ApplyInst:nxt) d _) = do
   S.put vmState {
-    vmStack = rest
+    vmStack = []
   , vmEnv   = M.insert param arg env
   , vmCode  = code
-  , vmDump  = (rest, e, nxt):d
+  , vmDump  = (sRest, e, nxt):d
   }
   vm'
 
 -- restore the dump, cons the stack top onto the now-current stack
-vm'' vmState@(VM (retVal:_) _ (RestoreInst:_) ((rS, rE, rC):dRest) _) = do
+vm'' vmState@(VM (retVal:_) _ (ReturnInst:_) ((rS, rE, rC):dRest) _) = do
   S.put vmState {
     vmStack = retVal:rS
   , vmEnv   = rE
@@ -191,6 +192,7 @@ vm'' vmState@(VM (val:sRest) _ ((DefineInst idtf):nxt) _ g) = do
 vm'' vmState@(VM s e ((FreezeInst fCode):nxt) _ _) = do
   S.put vmState {
     vmStack = (Thunk fCode e):s
+  , vmCode  = nxt
   }
   vm'
 
