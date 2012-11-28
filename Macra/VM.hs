@@ -166,8 +166,8 @@ vm'' vmState@(VM (bool:sRest) _ ((TestInst tClause fClause):nxt) d g) = do
   S.put vmState {
     vmStack = sRest
   , vmCode  = case bool of
-      true -> tClause
-      false -> fClause
+                false -> fClause
+                _ -> tClause
   , vmDump  = ([], M.fromList [], nxt):d
   }
   vm'
