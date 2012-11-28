@@ -4,6 +4,6 @@ SECDコンパイラ、VMの検証
 
 !print 
   !if 
-    !funcall !lambda x x 0
-    1
-    0
+    !funcall !lambda x x nil
+    555
+    111

@@ -80,10 +80,10 @@ vm :: Code -> IO ()
 vm code = do
   S.evalStateT vm' VM {
     vmStack = []
-  , vmEnv   = initialEnv
+  , vmEnv   = M.empty
   , vmCode  = code
   , vmDump  = []
-  , vmGlobalEnv  = M.empty
+  , vmGlobalEnv  = initialEnv -- store default binding in global env
   }
   where initialEnv = M.fromList [ ("nil", nil) ]
 
@@ -203,6 +203,12 @@ vm'' vmState@(VM ((Thunk tCode tEnv):sRest) e (ThawInst:nxt) d _) = do
   , vmEnv   = tEnv
   , vmCode  = tCode
   , vmDump  = (sRest, e, nxt):d
+  }
+  vm'
+-- pass if thaw is tried on non-thunk value
+vm'' vmState@(VM (nonThunk:sRest) e (ThawInst:nxt) d _) = do
+  S.put vmState {
+    vmCode = nxt
   }
   vm'
 
