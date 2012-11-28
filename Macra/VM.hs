@@ -50,11 +50,12 @@ data VM = VM {
      }
 
 instance Show VM where
-  show (VM s e c d ge) = concat ["S: ", show s, "\n",
-                                 "E: ", show e, "\n",
-                                 "C: ", show c, "\n",
-                                 "D: ", show d, "\n",
-                                 "G: ", show ge, "\n"]
+  show (VM s e c d ge) = concat [ "S: ", show s, "\n"
+                                , "E: ", show e, "\n"
+                                , "C: ", show c, "\n"
+                                , "D: ", show d, "\n"
+                                , "G: ", show ge, "\n"
+                                ]
 
 type Stack = [Value]
 type Env   = M.Map Identifier Value
