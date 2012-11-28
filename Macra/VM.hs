@@ -82,7 +82,7 @@ vm inst = do
   , vmEnv   = initialEnv
   , vmCode  = [inst]
   , vmDump  = []
-  , vmGlobalEnv  = M.fromList []
+  , vmGlobalEnv  = M.empty
   }
   where initialEnv = M.fromList [ ("nil", nil) ]
 
@@ -165,10 +165,8 @@ vm'' vmState@(VM (retVal:_) _ (RestoreInst:_) ((rS, rE, rC):dRest) _) = do
 vm'' vmState@(VM (bool:sRest) _ ((TestInst tClause fClause):nxt) d g) = do
   S.put vmState {
     vmStack = sRest
-  , vmCode  = case bool of
-      true -> tClause
-      false -> fClause
-  , vmDump  = ([], M.fromList [], nxt):d
+  , vmCode  = if bool == true then tClause else fClause
+  , vmDump  = ([], M.empty, nxt):d
   }
   vm'
 
@@ -185,7 +183,7 @@ vm'' vmState@(VM (val:sRest) _ ((DefineInst idtf):nxt) _ g) = do
   S.put vmState {
     vmStack = sRest
   , vmCode  = nxt
-  , vmGlobalEnv = M.insert idtg val g
+  , vmGlobalEnv = M.insert idtf val g
   }
   vm'
 
@@ -197,7 +195,7 @@ vm'' vmState@(VM s e ((FreezeInst fCode):nxt) _ _) = do
   vm'
 
 -- evaluate the code inside the thunk
-vm'' vmState@(VM (Thunk tCode tEnv):sRest e (ThawInst:nxt) d _) = do
+vm'' vmState@(VM ((Thunk tCode tEnv):sRest) e (ThawInst:nxt) d _) = do
   S.put vmState {
     vmStack = []
   , vmEnv   = tEnv
