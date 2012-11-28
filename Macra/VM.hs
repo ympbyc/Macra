@@ -11,7 +11,7 @@ data Value = Double  Double
            | Char    Char
            | List    [Value]
            | Closure Identifier Code Env --Identity
-           | Thunk   Inst            Env
+           | Thunk   Code            Env
            deriving (Eq, Ord)
 
 instance Show Value where
@@ -27,7 +27,7 @@ data Inst = ConstExpr  Value           -- ldc
           | CarInst
           | CdrInst
           | CloseInst  Identifier Code -- ldf
-          | FreezeInst Inst
+          | FreezeInst Code
           | ApplyInst                  -- ap
           | ThawInst
           | ReferInst  Identifier      -- ld
@@ -112,8 +112,8 @@ vm'' vmState@(VM s e (PrintInst:nxt) d g) = do
   vm'
 
 -- refer the value associated with idtf in env
-vm'' vmState@(VM s e ((ReferInst idtf):nxt) _ _) = do
-  case lookupVal idtf e of
+vm'' vmState@(VM s e ((ReferInst idtf):nxt) _ g) = do
+  case lookupVal idtf e of -- refer local
     Just v -> do
       S.put vmState {
         vmStack = v:s
@@ -121,9 +121,17 @@ vm'' vmState@(VM s e ((ReferInst idtf):nxt) _ _) = do
       }
       vm'
     Nothing -> do
-      S.liftIO $ do
-        putStr $ concat ["unbound variable: `", idtf, "'"]
-        return ()
+      case lookupVal idtf g of  -- refer global
+        Just v -> do
+          S.put vmState {
+            vmStack = v:s
+          , vmCode  = nxt
+          }
+          vm'
+        Nothing -> do
+          S.liftIO $ do
+            putStr $ concat ["unbound variable: `", idtf, "'"]
+            return ()
 
 -- make a closure and cons it onto the stack
 vm'' vmState@(VM s e ((CloseInst param code):nxt) _ _) = do
@@ -154,10 +162,12 @@ vm'' vmState@(VM (retVal:_) _ (RestoreInst:_) ((rS, rE, rC):dRest) _) = do
   vm'
 
 -- if
-vm'' vmState@(VM ((Bool bool):sRest) _ ((TestInst tClause fClause):nxt) d g) = do
+vm'' vmState@(VM (bool:sRest) _ ((TestInst tClause fClause):nxt) d g) = do
   S.put vmState {
     vmStack = sRest
-  , vmCode  = if bool then tClause else fClause
+  , vmCode  = case bool of
+      true -> tClause
+      false -> fClause
   , vmDump  = ([], M.fromList [], nxt):d
   }
   vm'
@@ -170,4 +180,33 @@ vm'' vmState@(VM _ _ (JoinInst:_) ((_, _, nxt):dRest) _) = do
   }
   vm'
 
+-- bind the value at the top of the stack to identifier globally
+vm'' vmState@(VM (val:sRest) _ ((DefineInst idtf):nxt) _ g) = do
+  S.put vmState {
+    vmStack = sRest
+  , vmCode  = nxt
+  , vmGlobalEnv = M.insert idtg val g
+  }
+  vm'
 
+-- delay the evaluation of the code until thawed
+vm'' vmState@(VM s e ((FreezeInst fCode):nxt) _ _) = do
+  S.put vmState {
+    vmStack = (Thunk fCode e):s
+  }
+  vm'
+
+-- evaluate the code inside the thunk
+vm'' vmState@(VM (Thunk tCode tEnv):sRest e (ThawInst:nxt) d _) = do
+  S.put vmState {
+    vmStack = []
+  , vmEnv   = tEnv
+  , vmCode  = tCode
+  , vmDump  = (sRest, e, nxt):d
+  }
+  vm'
+
+vm'' vmState = do
+  S.liftIO $ do
+    print "** VM BUG **: "
+    print vmState
