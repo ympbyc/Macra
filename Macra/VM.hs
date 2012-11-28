@@ -82,7 +82,7 @@ vm inst = do
   , vmEnv   = initialEnv
   , vmCode  = [inst]
   , vmDump  = []
-  , vmGlobalEnv  = M.fromList []
+  , vmGlobalEnv  = M.empty
   }
   where initialEnv = M.fromList [ ("nil", nil) ]
 
@@ -168,7 +168,7 @@ vm'' vmState@(VM (bool:sRest) _ ((TestInst tClause fClause):nxt) d g) = do
   , vmCode  = case bool of
                 false -> fClause
                 _ -> tClause
-  , vmDump  = ([], M.fromList [], nxt):d
+  , vmDump  = ([], M.empty, nxt):d
   }
   vm'
 
