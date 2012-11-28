@@ -1,4 +1,4 @@
-module Macra.VM (Value(..), Identifier(..), Inst(..), {--vm--}) where
+module Macra.VM (Value(..), Identifier(..), Inst(..), Code, vm) where
 
 import qualified Data.Unique as U
 import qualified Data.Map as M
@@ -75,12 +75,12 @@ true = Double 0
 false :: Value
 false = nil
 
-vm :: Inst -> IO ()
-vm inst = do
+vm :: Code -> IO ()
+vm code = do
   S.evalStateT vm' VM {
     vmStack = []
   , vmEnv   = initialEnv
-  , vmCode  = [inst]
+  , vmCode  = code
   , vmDump  = []
   , vmGlobalEnv  = M.empty
   }

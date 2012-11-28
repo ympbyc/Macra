@@ -210,39 +210,62 @@ macroReplaceSym var ((param, arg):xs)
                 | param == var = Left ExpandError
                 | otherwise = macroReplaceSym var xs
 
-compile :: MacroMap -> Node -> Either CompileError Inst 
+compile :: MacroMap -> Node -> Either CompileError Code 
 compile mm x =
         case  (macroExpand mm toplevelContext x) of
-          Right node -> Right (compileNode node HaltInst)
+          Right node -> Right (compileNode node [HaltInst])
           Left err -> Left (CompileExpandError err)
 
-compileNode :: Node -> Inst -> Inst
+compileNode :: Node -> Code -> Code
 
-compileNode NilNode next =
-  ConstExpr (VM.List []) next
-compileNode (SymNode symbol) next =
-  ReferInst symbol (ThawInst next) --Refer returns a thunk. Thaw extracs the thunk
-compileNode (CharNode chr) next =
-  ConstExpr (VM.Char chr) next
-compileNode (NumNode num) next =
-  ConstExpr (VM.Double num) next
-compileNode (IfNode condExp thenExp elseExp) next =
-  compileNode condExp $
-    TestInst (compileNode thenExp next)
-             (compileNode elseExp next)
-compileNode (LambdaNode param expr) next = 
-  CloseInst param (compileNode expr ReturnInst) next
-compileNode (DefineNode var val) next =
-  compileNode val $ DefineInst var next
-compileNode (FuncallNode lambda argument) next = 
-  -- Save call-frame before funcalling. funcall applies `lambda` to `argument`
-  -- Freeze the argument to create a thunk. (Lazy evaluation)
-  FrameInst next (FreezeInst (compileNode argument HaltInst) (ArgInst (compileNode lambda ApplyInst)))
-compileNode (PrintNode argument) next =
-  compileNode argument $ PrintInst next
-compileNode (ConsNode a b) next = compileNode a (ArgInst (compileNode b (ConsInst next)))
+compileNode NilNode code =
+  (ConstExpr (VM.List [])) : code
+
+compileNode (SymNode symbol) code =
+  (ReferInst symbol) : ThawInst : code --Refer returns a thunk. Thaw extracs the thunk
+
+compileNode (CharNode chr) code =
+  (ConstExpr (VM.Char chr)) : code
+
+compileNode (NumNode num) code =
+  (ConstExpr (VM.Double num)) : code
+
+compileNode (IfNode condExp thenExp elseExp) code =
+  compileNode condExp ((TestInst
+    (compileNode thenExp [JoinInst]) 
+    (compileNode elseExp [JoinInst])) : code)
+
+compileNode (LambdaNode param expr) code = 
+  (CloseInst param (compileNode expr [ReturnInst])) : code
+
+compileNode (DefineNode var val) code =
+  compileNode (DelayNode val) ((DefineInst var):code)
+
+compileNode (FuncallNode lambda argument) code = 
+  compileNode 
+    (DelayNode argument) -- arg is pushed to the stack
+    (compileNode lambda (ApplyInst:code)) -- lambda is pushed to the stack and ApplyInst runs
+
+compileNode (PrintNode argument) code =
+  compileNode argument (PrintInst:code)
+
+compileNode (DelayNode expr) code =
+  (FreezeInst (compileNode expr [ReturnInst])) : code
+
+compileNode _ code = 
+  code -- not implemented yet
+
+{-
+compileNode (ConsNode a b) code = 
+  compileNode a (ArgInst (compileNode b (ConsInst next)))
+
 compileNode (CarNode node) next = compileNode node (CarInst next)
+
 compileNode (CdrNode node) next = compileNode node (CdrInst next)
+
 compileNode (DoNode a b) next = compileNode a (compileNode b next)
+
 compileNode (EqualNode a b) next = compileNode a (ArgInst (compileNode b (EqualInst next)))
+
 compileNode (NativeNode a) next = NativeInst a next
+-}

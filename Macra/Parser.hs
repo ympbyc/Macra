@@ -54,6 +54,7 @@ data Node = SymNode Identifier
           | DoNode Node Node
           | NativeNode Integer
           | EqualNode Node Node
+          | DelayNode Node
           deriving (Eq)
 
 instance Show Node where
